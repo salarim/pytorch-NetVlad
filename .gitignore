@@ -128,3 +128,8 @@ dmypy.json
 # Pyre type checker
 .pyre/
 
+# Generated folders during training
+runs/
+data/
+cache/
+vgg16_netvlad_checkpoint/
