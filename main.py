@@ -12,6 +12,7 @@ import torch.optim as optim
 from torch.autograd import Variable
 from torch.utils.data import DataLoader, SubsetRandomSampler
 from torch.utils.data.dataset import Subset
+from torch.utils.mobile_optimizer import optimize_for_mobile
 import torchvision.transforms as transforms
 from PIL import Image
 from datetime import datetime
@@ -58,7 +59,7 @@ parser.add_argument('--patience', type=int, default=10, help='Patience for early
 parser.add_argument('--dataset', type=str, default='pittsburgh', 
         help='Dataset to use', choices=['pittsburgh', 'inloc'])
 parser.add_argument('--arch', type=str, default='vgg16', 
-        help='basenetwork to use', choices=['vgg16', 'alexnet'])
+        help='basenetwork to use', choices=['vgg16', 'alexnet', 'mobilenet_v2'])
 parser.add_argument('--vladv2', action='store_true', help='Use VLAD v2')
 parser.add_argument('--pooling', type=str, default='netvlad', help='type of pooling to use',
         choices=['netvlad', 'max', 'avg'])
@@ -282,6 +283,14 @@ def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
     if is_best:
         shutil.copyfile(model_out_path, join(opt.savePath, 'model_best.pth.tar'))
 
+def save_mobile_model():
+    model.eval()
+    example = torch.rand(1, 3, 480, 640).to(device)
+    traced_script_module = torch.jit.trace(model, example)
+    optimized_traced_model = optimize_for_mobile(traced_script_module)
+    optimized_traced_model.save("mobile_model.pt")
+    print('===> Mobile model saved!')
+
 class Flatten(nn.Module):
     def forward(self, input):
         return input.view(input.size(0), -1)
@@ -399,13 +408,25 @@ if __name__ == "__main__":
             for l in layers[:-5]: 
                 for p in l.parameters():
                     p.requires_grad = False
+    
+    elif opt.arch.lower() == 'mobilenet_v2':
+        encoder_dim = 320
+        encoder = models.mobilenet_v2(pretrained=pretrained)
+        
+        layers = list(encoder.features.children())[:-1]
+
+        if pretrained:
+            # if using pretrained then only train conv5_1, conv5_2, and conv5_3
+            for l in layers[:-5]: 
+                for p in l.parameters():
+                    p.requires_grad = False
 
     if opt.mode.lower() == 'cluster' and not opt.vladv2:
         layers.append(L2Norm())
 
     encoder = nn.Sequential(*layers)
-    model = nn.Module() 
-    model.add_module('encoder', encoder)
+    model = netvlad.WholeNetVLAD()
+    model.encoder = encoder
 
     if opt.mode.lower() != 'cluster':
         if opt.pooling.lower() == 'netvlad':
@@ -425,13 +446,13 @@ if __name__ == "__main__":
                     net_vlad.init_params(clsts, traindescs) 
                     del clsts, traindescs
 
-            model.add_module('pool', net_vlad)
+            model.pool = net_vlad
         elif opt.pooling.lower() == 'max':
             global_pool = nn.AdaptiveMaxPool2d((1,1))
-            model.add_module('pool', nn.Sequential(*[global_pool, Flatten(), L2Norm()]))
+            model.pool = nn.Sequential(*[global_pool, Flatten(), L2Norm()])
         elif opt.pooling.lower() == 'avg':
             global_pool = nn.AdaptiveAvgPool2d((1,1))
-            model.add_module('pool', nn.Sequential(*[global_pool, Flatten(), L2Norm()]))
+            model.pool = nn.Sequential(*[global_pool, Flatten(), L2Norm()])
         else:
             raise ValueError('Unknown pooling type: ' + opt.pooling)
 
@@ -485,6 +506,7 @@ if __name__ == "__main__":
 
     if opt.mode.lower() == 'test':
         print('===> Running evaluation step')
+        # save_mobile_model()
         epoch = 1
         recalls = test(whole_test_set, epoch, write_tboard=False)
     elif opt.mode.lower() == 'cluster':

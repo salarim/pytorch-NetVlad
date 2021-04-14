@@ -4,6 +4,23 @@ import torch.nn.functional as F
 from sklearn.neighbors import NearestNeighbors
 import numpy as np
 
+
+class WholeNetVLAD(nn.Module):
+
+    def __init__(self):
+        super(WholeNetVLAD, self).__init__()
+        self.encoder = None
+        self.pool = None
+
+    def forward(self, x):
+        if self.encoder is None or self.pool is None:
+            raise Exception("Model doens't have encoder or pool.")
+
+        x = self.encoder(x)
+        x = self.pool(x)
+        return x
+
+
 # based on https://github.com/lyakaap/NetVLAD-pytorch/blob/master/netvlad.py
 class NetVLAD(nn.Module):
     """NetVLAD layer implementation"""
@@ -65,7 +82,7 @@ class NetVLAD(nn.Module):
         N, C = x.shape[:2]
 
         if self.normalize_input:
-            x = F.normalize(x, p=2, dim=1)  # across descriptor dim
+            x = F.normalize(x, p=2.0, dim=1)  # across descriptor dim
 
         # soft-assignment
         soft_assign = self.conv(x).view(N, self.num_clusters, -1)
@@ -81,8 +98,8 @@ class NetVLAD(nn.Module):
             residual *= soft_assign[:,C:C+1,:].unsqueeze(2)
             vlad[:,C:C+1,:] = residual.sum(dim=-1)
 
-        vlad = F.normalize(vlad, p=2, dim=2)  # intra-normalization
+        vlad = F.normalize(vlad, p=2.0, dim=2)  # intra-normalization
         vlad = vlad.view(x.size(0), -1)  # flatten
-        vlad = F.normalize(vlad, p=2, dim=1)  # L2 normalize
+        vlad = F.normalize(vlad, p=2.0, dim=1)  # L2 normalize
 
         return vlad
